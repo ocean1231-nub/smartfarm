@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스마트팜 모니터링 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 6px;
+            color: #2c3e50;
+        }
+
+        .status {
+            text-align: center;
+            font-size: 13px;
+            color: #7f8c8d;
+            margin-bottom: 16px;
+            min-height: 18px;
+        }
+
+        .status.error { color: #e74c3c; }
+
+        /* 실시간 / 최근 7일 전환 버튼 */
+        .mode-switch {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .mode-switch button {
+            border: 2px solid #d7dee3;
+            background: #ffffff;
+            color: #7f8c8d;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 8px 18px;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+        }
+
+        .mode-switch button:hover { border-color: #3498db; color: #3498db; }
+
+        .mode-switch button.active {
+            background: #3498db;
+            border-color: #3498db;
+            color: #ffffff;
+        }
+
+        .chart-container {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
+            position: relative;
+            height: 380px;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .card {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            border: 2px solid transparent;
+            text-align: center;
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .card.active {
+            border-color: #3498db;
+            background-color: #f0f7ff;
+        }
+
+        .card h3 {
+            font-size: 15px;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+        }
+
+        .card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>스마트팜 모니터링 대시보드</h1>
+        <div class="status" id="status">불러오는 중…</div>
+
+        <div class="mode-switch">
+            <button id="mode-live" class="active" onclick="switchMode('live')">실시간</button>
+            <button id="mode-week" onclick="switchMode('week')">최근 7일</button>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="sensorChart"></canvas>
+        </div>
+
+        <div class="cards-grid">
+            <div class="card active" onclick="switchSensor('ph')" id="card-ph">
+                <h3>pH</h3>
+                <div class="value" id="val-ph">--</div>
+            </div>
+            <div class="card" onclick="switchSensor('ec')" id="card-ec">
+                <h3>EC (mS/cm)</h3>
+                <div class="value" id="val-ec">--</div>
+            </div>
+            <div class="card" onclick="switchSensor('temp')" id="card-temp">
+                <h3>온도 (°C)</h3>
+                <div class="value" id="val-temp">--</div>
+            </div>
+            <div class="card" onclick="switchSensor('humidity')" id="card-humidity">
+                <h3>습도 (%)</h3>
+                <div class="value" id="val-humidity">--</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Supabase 접속 정보 -->
+    <script src="config.js"></script>
+    <script>
+        // ================= 설정 =================
+        const DEVICE_ID = null;   // 장치 구분 컬럼이 생기면 여기에 값 지정
+
+        // 모드별 조회 방식
+        const MODES = {
+            live: {
+                btn: 'mode-live',
+                table: window.SUPABASE_TABLE_RAW || 'sensor_data',
+                // sensor_data 는 컬럼명이 "PH" "EC" + 한글 "온도" "습도" → 따옴표 필수
+                select: '"PH","EC","온도","습도",created_at',
+                tkey: 'created_at',
+                col: { ph: 'PH', ec: 'EC', temp: '온도', humidity: '습도' },
+                sinceMs: 30 * 60 * 1000,   // 최근 30분
+                cap: 800,
+                refreshMs: 15000,
+                fmt: (iso) => new Date(iso).toLocaleTimeString('ko-KR',
+                        { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            },
+            week: {
+                btn: 'mode-week',
+                table: window.SUPABASE_TABLE_5MIN || 'sensor_5min',
+                select: 'ph,ec,temp,humidity,bucket',
+                tkey: 'bucket',
+                col: { ph: 'ph', ec: 'ec', temp: 'temp', humidity: 'humidity' },
+                sinceMs: 7 * 24 * 60 * 60 * 1000,   // 최근 7일
+                cap: 3000,
+                refreshMs: 60000,
+                fmt: (iso) => {
+                    const d = new Date(iso);
+                    const p = (n) => String(n).padStart(2, '0');
+                    return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+                },
+            },
+        };
+
+        const META = {
+            ph:       { label: 'pH',        color: '#e74c3c' },
+            ec:       { label: 'EC (mS/cm)', color: '#e67e22' },
+            temp:     { label: '온도 (°C)',  color: '#3498db' },
+            humidity: { label: '습도 (%)',   color: '#2ecc71' },
+        };
+
+        const statusEl = document.getElementById('status');
+        let supabase = null;
+        let myChart = null;
+        let currentSensor = 'ph';
+        let currentMode = 'live';
+        let series = emptySeries();
+        let timer = null;
+
+        function emptySeries() {
+            return { ph: [], ec: [], temp: [], humidity: [], times: [] };
+        }
+
+        function setStatus(msg, isError) {
+            statusEl.textContent = msg;
+            statusEl.classList.toggle('error', !!isError);
+        }
+
+        function toNum(v) {
+            return (v === null || v === undefined || v === '') ? null : Number(v);
+        }
+
+        function initClient() {
+            const url = window.SUPABASE_URL;
+            const key = window.SUPABASE_ANON_KEY;
+            if (!url || !key || String(key).includes('YOUR_')) {
+                setStatus('config.js 에 SUPABASE_URL / SUPABASE_ANON_KEY 를 설정하세요.', true);
+                return false;
+            }
+            supabase = window.supabase.createClient(url, key);
+            return true;
+        }
+
+        // ---- 그래프 데이터 (모드별) ----
+        async function loadChartData() {
+            const m = MODES[currentMode];
+            let q = supabase
+                .from(m.table)
+                .select(m.select)
+                .gte(m.tkey, new Date(Date.now() - m.sinceMs).toISOString())
+                .order(m.tkey, { ascending: true })
+                .limit(m.cap);
+            if (DEVICE_ID) q = q.eq('device_id', DEVICE_ID);
+
+            const { data, error } = await q;
+            if (error) {
+                setStatus('그래프 조회 오류: ' + error.message, true);
+                return;
+            }
+
+            series = emptySeries();
+            for (const r of (data || [])) {
+                series.times.push(m.fmt(r[m.tkey]));
+                series.ph.push(toNum(r[m.col.ph]));
+                series.ec.push(toNum(r[m.col.ec]));
+                series.temp.push(toNum(r[m.col.temp]));
+                series.humidity.push(toNum(r[m.col.humidity]));
+            }
+            drawChart(currentSensor);
+
+            const modeLabel = currentMode === 'live' ? '실시간(최근 30분)' : '최근 7일 · 5분 간격';
+            if (!data || data.length === 0) {
+                setStatus(modeLabel + ' · 표시할 데이터 없음');
+            } else {
+                setStatus(modeLabel + ' · ' + data.length + '개 지점 · 갱신 ' + nowHm());
+            }
+        }
+
+        // ---- 카드 값: 항상 원본 최신 1행 ----
+        async function loadLatest() {
+            const raw = MODES.live;
+            let q = supabase
+                .from(raw.table)
+                .select(raw.select)
+                .order('created_at', { ascending: false })
+                .limit(1);
+            if (DEVICE_ID) q = q.eq('device_id', DEVICE_ID);
+
+            const { data, error } = await q;
+            if (error || !data || !data.length) return;
+            const r = data[0];
+            setValue('ph', r[raw.col.ph]);
+            setValue('ec', r[raw.col.ec]);
+            setValue('temp', r[raw.col.temp]);
+            setValue('humidity', r[raw.col.humidity]);
+        }
+
+        function setValue(key, v) {
+            const n = toNum(v);
+            document.getElementById('val-' + key).textContent =
+                (n === null || Number.isNaN(n)) ? '--' : n;
+        }
+
+        function nowHm() {
+            return new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function drawChart(sensorKey) {
+            const meta = META[sensorKey];
+            const ctx = document.getElementById('sensorChart').getContext('2d');
+            if (myChart) myChart.destroy();
+
+            myChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: series.times,
+                    datasets: [{
+                        label: meta.label + (currentMode === 'week' ? ' · 5분 평균' : ' · 실시간'),
+                        data: series[sensorKey],
+                        borderColor: meta.color,
+                        backgroundColor: meta.color + '22',
+                        borderWidth: 2.5,
+                        pointRadius: series.times.length > 60 ? 0 : 3,
+                        fill: true,
+                        tension: 0.3,
+                        spanGaps: true,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: { legend: { display: true, position: 'top' } },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0 } },
+                        y: { beginAtZero: false }
+                    }
+                }
+            });
+        }
+
+        function switchSensor(sensorKey) {
+            currentSensor = sensorKey;
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+            document.getElementById('card-' + sensorKey).classList.add('active');
+            drawChart(sensorKey);
+        }
+
+        function switchMode(mode) {
+            if (mode === currentMode) return;
+            currentMode = mode;
+            for (const key of Object.keys(MODES)) {
+                document.getElementById(MODES[key].btn).classList.toggle('active', key === mode);
+            }
+            startPolling();   // 새 모드로 즉시 조회 + 주기 재설정
+        }
+
+        function startPolling() {
+            if (timer) clearInterval(timer);
+            const tick = () => { loadChartData(); loadLatest(); };
+            tick();
+            timer = setInterval(tick, MODES[currentMode].refreshMs);
+        }
+
+        window.onload = function () {
+            drawChart('ph');            // 빈 차트 먼저
+            if (!initClient()) return;
+            startPolling();
+        };
+    </script>
+</body>
+</html>

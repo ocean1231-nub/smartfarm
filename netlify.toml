@@ -1,0 +1,10 @@
+# 빌드 없는 정적 사이트. 저장소 루트를 그대로 게시.
+[build]
+  publish = "."
+  command = ""
+
+# config.js 캐시로 옛 키가 남지 않게
+[[headers]]
+  for = "/config.js"
+  [headers.values]
+    Cache-Control = "no-cache"

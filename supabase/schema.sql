@@ -1,0 +1,26 @@
+-- ============================================================
+-- 참고용: 현재 Supabase 스키마. 실행 불필요 (프론트가 이 구조로 조회함)
+-- 실제로 실행할 건 enable-public-read.sql 하나.
+-- ============================================================
+--
+-- 프로젝트 URL: https://eoioozljabtxxhzpjrnu.supabase.co
+--
+-- [원본 테이블]  public.sensor_data
+--   id          bigint       (PK)
+--   "PH"        numeric
+--   "EC"        numeric
+--   "온도"      numeric
+--   "습도"      numeric
+--   created_at  timestamptz  default now()      -- Supabase 자동 입력
+--   저장: ESP32 가 빠른 간격(5초)으로 { "PH","EC","온도","습도" } 한 세트를 한 행 INSERT
+--
+-- [집계 뷰]  public.sensor_5min   (enable-public-read.sql 에서 생성)
+--   bucket   timestamptz   -- 5분 구간
+--   ph, ec, temp, humidity  numeric  -- 구간 평균 (ASCII 별칭)
+--   samples  int
+--
+-- [RLS]
+--   sensor_data : anon INSERT (있음) + anon SELECT (enable-public-read.sql 에서 추가)
+--   sensor_5min : anon SELECT grant
+--
+-- [클라이언트 키] Publishable key (sb_publishable_...) 만 사용. Secret key 금지.
