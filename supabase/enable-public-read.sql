@@ -29,7 +29,12 @@ order by 1;
 
 grant select on public.sensor_5min to anon;
 
--- 3) PostgREST 스키마 캐시 새로고침 (뷰가 API에 바로 안 잡히면)
+-- 3) created_at 인덱스 (실시간 조회 order/limit + sensor_5min 집계 시간필터 가속)
+--    5초마다 쌓여서 금방 수만 행 → 인덱스 없으면 매 조회가 풀스캔+정렬.
+create index if not exists sensor_data_created_at_idx
+  on public.sensor_data (created_at desc);
+
+-- 4) PostgREST 스키마 캐시 새로고침 (뷰가 API에 바로 안 잡히면)
 notify pgrst, 'reload schema';
 
 -- ------------------------------------------------------------
