@@ -1,15 +1,17 @@
 <!DOCTYPE html>
 <!--
   스마트팜 모니터링 대시보드
-  ── 버전: 2026-09-10-kst2 ─────────────────────────────
-  이전(형 rnwodud9/smartfarm 배포본)과 구분점:
-    1. 측정 시각을 항상 한국시간(Asia/Seoul)으로 표시  → kstParts()
-    2. <!DOCTYPE html> 유지 (배포본은 브라우저 저장으로 유실 → quirks 모드)
-    3. 배포본에 섞여든 /.netlify/scripts/hud 스크립트, 박제된 에러 문구 제거
-    4. Supabase 클라이언트 변수명 supabaseClient (형 변경분 반영)
-    5. 폴링 간격 완화: 실시간 15s→30s, 최근7일 60s→5분 (Supabase egress 절약)
-    6. 안 보이는 탭은 폴링 정지 (document.hidden) + 복귀 시 즉시 갱신
-  권장: sensor_data(created_at) 인덱스 추가 (supabase/enable-public-read.sql 참고)
+  ── 버전: 2026-09-11 ──────────────────────────────────
+  주요 변경 이력:
+    - 측정 시각을 항상 한국시간(Asia/Seoul)으로 표시  → kstParts()
+    - <!DOCTYPE html> 유지 (브라우저 저장본은 유실 → quirks 모드)
+    - 배포본에 섞여든 /.netlify/scripts/hud 스크립트, 박제된 에러 문구 제거
+    - Supabase 클라이언트 변수명 supabaseClient
+    - 폴링 완화: 실시간 30s / 최근7일 5분 / 최근1년 1시간
+    - 안 보이는 탭은 폴링 정지 (document.hidden) + 복귀 시 즉시 갱신
+    - [NEW] "최근 1년" 모드: sensor_daily 테이블(일별 평균) 조회
+  필요 SQL: supabase/enable-public-read.sql (뷰+정책+인덱스),
+            supabase/retention.sql (sensor_daily 롤업 + 30일 raw 정리, pg_cron)
   기준 저장소: rnwodud9/smartfarm   배포: https://smurffarm.netlify.app
 -->
 <html lang="ko">
@@ -144,6 +146,7 @@
         <div class="mode-switch">
             <button id="mode-live" class="active" onclick="switchMode('live')">실시간</button>
             <button id="mode-week" onclick="switchMode('week')">최근 7일</button>
+            <button id="mode-year" onclick="switchMode('year')">최근 1년</button>
         </div>
 
         <div class="chart-container">
@@ -170,7 +173,7 @@
         </div>
 
         <div style="text-align:center;font-size:11px;color:#b0b8bd;margin-top:16px;">
-            smartfarm dashboard · v2026-09-10-kst2 · 시각 KST · 실시간 30s / 최근7일 5분 갱신
+            smartfarm dashboard · v2026-09-11 · 시각 KST · 실시간 30s / 최근7일 5분 / 최근1년 1시간
         </div>
     </div>
 
@@ -184,6 +187,8 @@
         const MODES = {
             live: {
                 btn: 'mode-live',
+                title: '실시간(최근 30분)',
+                unit: '실시간',
                 table: window.SUPABASE_TABLE_RAW || 'sensor_data',
                 // sensor_data 는 컬럼명이 "PH" "EC" + 한글 "온도" "습도" → 따옴표 필수
                 select: '"PH","EC","온도","습도",created_at',
@@ -196,6 +201,8 @@
             },
             week: {
                 btn: 'mode-week',
+                title: '최근 7일 · 5분 간격',
+                unit: '5분 평균',
                 table: window.SUPABASE_TABLE_5MIN || 'sensor_5min',
                 select: 'ph,ec,temp,humidity,bucket',
                 tkey: 'bucket',
@@ -204,6 +211,20 @@
                 cap: 3000,
                 refreshMs: 300000,         // 5분 (버킷 간격과 동일 — 더 자주 할 이유 없음)
                 fmt: (iso) => { const p = kstParts(iso); return `${+p.month}/${+p.day} ${p.hour}:${p.minute}`; },
+            },
+            year: {
+                btn: 'mode-year',
+                title: '최근 1년 · 일별 평균',
+                unit: '일별 평균',
+                table: window.SUPABASE_TABLE_DAILY || 'sensor_daily',
+                select: 'ph,ec,temp,humidity,day',
+                tkey: 'day',
+                col: { ph: 'ph', ec: 'ec', temp: 'temp', humidity: 'humidity' },
+                sinceMs: 365 * 24 * 60 * 60 * 1000,   // 최근 1년
+                cap: 400,
+                refreshMs: 3600000,        // 1시간 (일별 데이터라 자주 볼 이유 없음)
+                // day 는 date 타입 "YYYY-MM-DD" → 문자열 그대로 파싱 (타임존 변환 불필요)
+                fmt: (d) => { const s = String(d).slice(0, 10).split('-'); return `${s[0].slice(2)}/${+s[1]}/${+s[2]}`; },
             },
         };
 
@@ -285,7 +306,7 @@
             }
             drawChart(currentSensor);
 
-            const modeLabel = currentMode === 'live' ? '실시간(최근 30분)' : '최근 7일 · 5분 간격';
+            const modeLabel = m.title;
             if (!data || data.length === 0) {
                 setStatus(modeLabel + ' · 표시할 데이터 없음');
             } else {
@@ -333,7 +354,7 @@
                 data: {
                     labels: series.times,
                     datasets: [{
-                        label: meta.label + (currentMode === 'week' ? ' · 5분 평균' : ' · 실시간'),
+                        label: meta.label + ' · ' + MODES[currentMode].unit,
                         data: series[sensorKey],
                         borderColor: meta.color,
                         backgroundColor: meta.color + '22',
