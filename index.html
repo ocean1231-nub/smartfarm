@@ -1,17 +1,19 @@
 <!DOCTYPE html>
 <!--
   스마트팜 모니터링 대시보드
-  ── 버전: 2026-09-11 ──────────────────────────────────
+  ── 버전: 2026-09-11b ─────────────────────────────────
   주요 변경 이력:
     - 측정 시각을 항상 한국시간(Asia/Seoul)으로 표시  → kstParts()
     - <!DOCTYPE html> 유지 (브라우저 저장본은 유실 → quirks 모드)
     - 배포본에 섞여든 /.netlify/scripts/hud 스크립트, 박제된 에러 문구 제거
     - Supabase 클라이언트 변수명 supabaseClient
-    - 폴링 완화: 실시간 30s / 최근7일 5분 / 최근1년 1시간
+    - 폴링 완화: 실시간 30s / 최근7일 5분 / 최근2개월 30분 / 전체기간 1시간
     - 안 보이는 탭은 폴링 정지 (document.hidden) + 복귀 시 즉시 갱신
-    - [NEW] "최근 1년" 모드: sensor_daily 테이블(일별 평균) 조회
-  필요 SQL: supabase/enable-public-read.sql (뷰+정책+인덱스),
-            supabase/retention.sql (sensor_daily 롤업 + 30일 raw 정리, pg_cron)
+    - 4단 줌 사다리: 실시간(raw,5초) → 최근7일(5분) → 최근2개월(시간별)
+      → 전체기간(일별). 저장 계층(raw/5min/hourly/daily)과 화면 탭 1:1 대응.
+    - 그래프 포인트에 마우스 올리면 툴팁: 날짜(요일)+시각+정확한 수치
+  필요 SQL: supabase/enable-public-read.sql (정책+인덱스),
+            supabase/retention.sql (sensor_5min/hourly/daily 롤업 + raw 30일 보존, pg_cron)
   기준 저장소: rnwodud9/smartfarm   배포: https://smurffarm.netlify.app
 -->
 <html lang="ko">
@@ -146,7 +148,8 @@
         <div class="mode-switch">
             <button id="mode-live" class="active" onclick="switchMode('live')">실시간</button>
             <button id="mode-week" onclick="switchMode('week')">최근 7일</button>
-            <button id="mode-year" onclick="switchMode('year')">최근 1년</button>
+            <button id="mode-hourly" onclick="switchMode('hourly')">최근 2개월</button>
+            <button id="mode-all" onclick="switchMode('all')">전체 기간</button>
         </div>
 
         <div class="chart-container">
@@ -173,7 +176,7 @@
         </div>
 
         <div style="text-align:center;font-size:11px;color:#b0b8bd;margin-top:16px;">
-            smartfarm dashboard · v2026-09-11 · 시각 KST · 실시간 30s / 최근7일 5분 / 최근1년 1시간
+            smartfarm dashboard · v2026-09-11b · 시각 KST · 그래프 위 4단계(실시간/7일/2개월/전체) · 값 위 마우스 올리면 상세
         </div>
     </div>
 
@@ -197,7 +200,8 @@
                 sinceMs: 30 * 60 * 1000,   // 최근 30분
                 cap: 800,
                 refreshMs: 30000,          // 30초 (요청/egress 절약)
-                fmt: (iso) => { const p = kstParts(iso); return `${p.hour}:${p.minute}:${p.second}`; },
+                fmt: (t) => { const p = kstParts(t); return `${p.hour}:${p.minute}:${p.second}`; },
+                fullFmt: (t) => { const p = kstParts(t); return `${kstFullDate(t)} ${p.hour}:${p.minute}:${p.second}`; },
             },
             week: {
                 btn: 'mode-week',
@@ -210,29 +214,45 @@
                 sinceMs: 7 * 24 * 60 * 60 * 1000,   // 최근 7일
                 cap: 3000,
                 refreshMs: 300000,         // 5분 (버킷 간격과 동일 — 더 자주 할 이유 없음)
-                fmt: (iso) => { const p = kstParts(iso); return `${+p.month}/${+p.day} ${p.hour}:${p.minute}`; },
+                fmt: (t) => { const p = kstParts(t); return `${+p.month}/${+p.day} ${p.hour}:${p.minute}`; },
+                fullFmt: (t) => { const p = kstParts(t); return `${kstFullDate(t)} ${p.hour}:${p.minute}`; },
             },
-            year: {
-                btn: 'mode-year',
-                title: '최근 1년 · 일별 평균',
+            hourly: {
+                btn: 'mode-hourly',
+                title: '최근 2개월 · 시간별 평균',
+                unit: '시간별 평균',
+                table: window.SUPABASE_TABLE_HOURLY || 'sensor_hourly',
+                select: 'ph,ec,temp,humidity,hour',
+                tkey: 'hour',
+                col: { ph: 'ph', ec: 'ec', temp: 'temp', humidity: 'humidity' },
+                sinceMs: 60 * 24 * 60 * 60 * 1000,   // 최근 60일
+                cap: 1500,
+                refreshMs: 1800000,        // 30분 (시간별 데이터라 그 이상 자주 볼 이유 없음)
+                fmt: (t) => { const p = kstParts(t); return `${+p.month}/${+p.day} ${p.hour}시`; },
+                fullFmt: (t) => { const p = kstParts(t); return `${kstFullDate(t)} ${p.hour}시`; },
+            },
+            all: {
+                btn: 'mode-all',
+                title: '전체 기간 · 일별 평균',
                 unit: '일별 평균',
                 table: window.SUPABASE_TABLE_DAILY || 'sensor_daily',
                 select: 'ph,ec,temp,humidity,day',
                 tkey: 'day',
                 col: { ph: 'ph', ec: 'ec', temp: 'temp', humidity: 'humidity' },
-                sinceMs: 365 * 24 * 60 * 60 * 1000,   // 최근 1년
-                cap: 400,
+                sinceMs: 20 * 365 * 24 * 60 * 60 * 1000,   // 사실상 전체(20년) — 쌓인 만큼 다 보여줌
+                cap: 8000,
                 refreshMs: 3600000,        // 1시간 (일별 데이터라 자주 볼 이유 없음)
                 // day 는 date 타입 "YYYY-MM-DD" → 문자열 그대로 파싱 (타임존 변환 불필요)
                 fmt: (d) => { const s = String(d).slice(0, 10).split('-'); return `${s[0].slice(2)}/${+s[1]}/${+s[2]}`; },
+                fullFmt: (d) => kstFullDate(d),
             },
         };
 
         const META = {
-            ph:       { label: 'pH',        color: '#e74c3c' },
-            ec:       { label: 'EC (mS/cm)', color: '#e67e22' },
-            temp:     { label: '온도 (°C)',  color: '#3498db' },
-            humidity: { label: '습도 (%)',   color: '#2ecc71' },
+            ph:       { label: 'pH',        short: 'pH',  color: '#e74c3c', unit: '' },
+            ec:       { label: 'EC (mS/cm)', short: 'EC',  color: '#e67e22', unit: ' mS/cm' },
+            temp:     { label: '온도 (°C)',  short: '온도', color: '#3498db', unit: '°C' },
+            humidity: { label: '습도 (%)',   short: '습도', color: '#2ecc71', unit: '%' },
         };
 
         const statusEl = document.getElementById('status');
@@ -244,7 +264,7 @@
         let timer = null;
 
         function emptySeries() {
-            return { ph: [], ec: [], temp: [], humidity: [], times: [] };
+            return { ph: [], ec: [], temp: [], humidity: [], times: [], raw: [] };
         }
 
         function setStatus(msg, isError) {
@@ -266,6 +286,15 @@
             }).formatToParts(new Date(t))) o[p.type] = p.value;
             if (o.hour === '24') o.hour = '00';
             return o;
+        }
+
+        // 툴팁용 전체 날짜(+요일). t 는 ISO 문자열/date-only 문자열/ms 숫자 다 됨.
+        function kstWeekday(t) {
+            return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', weekday: 'short' }).format(new Date(t));
+        }
+        function kstFullDate(t) {
+            const p = kstParts(t);
+            return `${p.year}-${p.month}-${p.day}(${kstWeekday(t)})`;
         }
 
         function initClient() {
@@ -299,6 +328,7 @@
             series = emptySeries();
             for (const r of (data || [])) {
                 series.times.push(m.fmt(r[m.tkey]));
+                series.raw.push(r[m.tkey]);
                 series.ph.push(toNum(r[m.col.ph]));
                 series.ec.push(toNum(r[m.col.ec]));
                 series.temp.push(toNum(r[m.col.temp]));
@@ -369,7 +399,26 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     animation: false,
-                    plugins: { legend: { display: true, position: 'top' } },
+                    // 점이 안 보여도(pointRadius 0) x축 근처에 마우스만 가면 툴팁 뜨게
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    plugins: {
+                        legend: { display: true, position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                title: (items) => {
+                                    if (!items.length) return '';
+                                    const t = series.raw[items[0].dataIndex];
+                                    return MODES[currentMode].fullFmt(t);
+                                },
+                                label: (item) => {
+                                    const v = item.parsed.y;
+                                    return v === null || v === undefined
+                                        ? meta.short + ': 값 없음'
+                                        : meta.short + ': ' + v + meta.unit;
+                                },
+                            },
+                        },
+                    },
                     scales: {
                         x: { ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0 } },
                         y: { beginAtZero: false }
