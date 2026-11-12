@@ -172,7 +172,7 @@
                 <div class="value" id="val-ph">--</div>
             </div>
             <div class="card" onclick="switchSensor('ec')" id="card-ec">
-                <h3>EC (mS/cm)</h3>
+                <h3>EC (µS/cm)</h3>
                 <div class="value" id="val-ec">--</div>
             </div>
             <div class="card" onclick="switchSensor('temp')" id="card-temp">
@@ -270,7 +270,7 @@
 
         const META = {
             ph:       { label: 'pH',        short: 'pH',  color: '#e74c3c', unit: '' },
-            ec:       { label: 'EC (mS/cm)', short: 'EC',  color: '#e67e22', unit: ' mS/cm' },
+            ec:       { label: 'EC (µS/cm)', short: 'EC',  color: '#e67e22', unit: ' µS/cm' },
             temp:     { label: '온도 (°C)',  short: '온도', color: '#3498db', unit: '°C' },
             humidity: { label: '습도 (%)',   short: '습도', color: '#2ecc71', unit: '%' },
         };
@@ -353,7 +353,7 @@
                     if (v !== null && !Number.isNaN(v)) { b[key][0] += v; b[key][1] += 1; }
                 }
             }
-            const decimals = { ph: 2, ec: 2, temp: 1, humidity: 1 };
+            const decimals = { ph: 2, ec: 0, temp: 1, humidity: 1 };
             return Array.from(buckets.keys()).sort((a, b) => a - b).map((bucketTs) => {
                 const b = buckets.get(bucketTs);
                 const out = { bucketTs };
